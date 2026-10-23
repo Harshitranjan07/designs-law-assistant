@@ -1,14 +1,20 @@
+import warnings
 from typing import List, Dict, Any, Optional
-import re
 import chromadb
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 import config
 from ingest import get_embedding_function
 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 
 class EvidenceRetriever:
     """Handles retrieval of relevant document passages from ChromaDB."""
+
+    _instance = None
 
     def __init__(self):
         self.client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
@@ -29,7 +35,6 @@ class EvidenceRetriever:
         if not self.is_ready():
             return []
 
-        # Generate search variations to ensure high recall across legal vocabulary
         queries = [query]
         q_lower = query.lower()
         if "classification" in q_lower or "classify" in q_lower:
@@ -65,6 +70,16 @@ class EvidenceRetriever:
         return sorted_passages[:top_k]
 
 
+# Singleton instance helper for instant retrieval without reloading models
+_GLOBAL_RETRIEVER = None
+
+def get_retriever() -> EvidenceRetriever:
+    global _GLOBAL_RETRIEVER
+    if _GLOBAL_RETRIEVER is None:
+        _GLOBAL_RETRIEVER = EvidenceRetriever()
+    return _GLOBAL_RETRIEVER
+
+
 SYSTEM_INSTRUCTION = """You are the official Designs Law Assistant for India, answering queries strictly using the provided extracts from the "Manual of Designs Practice & Procedure" (CGPDTM, IP India).
 
 CRITICAL CONSTRAINTS:
@@ -89,10 +104,14 @@ class RAGAssistant:
     """Orchestrates retrieval, evidence validation, and LLM generation."""
 
     def __init__(self, api_key: Optional[str] = None):
-        self.retriever = EvidenceRetriever()
+        self.retriever = get_retriever()
         self.api_key = api_key or config.GEMINI_API_KEY
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
+        self.client = None
+        if self.api_key and self.api_key != "your_gemini_api_key_here":
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+            except Exception as e:
+                print(f"[WARNING] Could not initialize google.genai Client: {e}")
 
     def answer_question(self, question: str) -> Dict[str, Any]:
         """
@@ -134,7 +153,7 @@ class RAGAssistant:
         context_str = "\n---\n".join(context_parts)
 
         # Check API key
-        if not self.api_key or self.api_key == "your_gemini_api_key_here":
+        if not self.api_key or self.api_key == "your_gemini_api_key_here" or not self.client:
             return {
                 "question": question,
                 "answer": "Not found",
@@ -152,13 +171,14 @@ Question:
 Answer:"""
 
         try:
-            model = genai.GenerativeModel(
-                model_name=config.GEMINI_MODEL_NAME,
-                system_instruction=SYSTEM_INSTRUCTION
-            )
-            response = model.generate_content(
-                prompt,
-                generation_config={"temperature": 0.0, "max_output_tokens": 500}
+            response = self.client.models.generate_content(
+                model=config.GEMINI_MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    temperature=0.0,
+                    max_output_tokens=500
+                )
             )
 
             raw_answer = response.text.strip() if response and response.text else "Not found"

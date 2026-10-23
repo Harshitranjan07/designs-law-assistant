@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 import config
 from ingest import extract_pages_from_pdf, chunk_pages, index_chunks
-from rag import EvidenceRetriever, RAGAssistant
+from rag import EvidenceRetriever, RAGAssistant, get_retriever
 
 
 def test_pdf_extraction_and_page_count():
@@ -28,7 +28,7 @@ def test_chunking_metadata():
 
 def test_retrieval_relevance():
     """Verify that relevant questions retrieve relevant chunks."""
-    retriever = EvidenceRetriever()
+    retriever = get_retriever()
     if not retriever.is_ready():
         pytest.skip("ChromaDB is not yet initialized.")
     
@@ -44,7 +44,6 @@ def test_mock_rag_supported_answer(monkeypatch):
     """Test RAG flow when model generates supported answer with citations."""
     assistant = RAGAssistant(api_key="mock_key")
     
-    # Mock retriever
     mock_passages = [{
         "text": "The proprietor shall have copyright in the design for ten years from the date of registration. This period of ten years can be extended by five years.",
         "metadata": {"chapter": "Chapter 6", "section": "06.04", "page_number": 36},
@@ -53,18 +52,18 @@ def test_mock_rag_supported_answer(monkeypatch):
     monkeypatch.setattr(assistant.retriever, "is_ready", lambda: True)
     monkeypatch.setattr(assistant.retriever, "retrieve", lambda q, top_k=4: mock_passages)
     
-    # Mock genai model response
     class MockResponse:
         text = "A proprietor has copyright for ten years, extendable by five years.\nSource: Chapter 6, Section 06.04, Page 36"
     
-    class MockModel:
-        def __init__(self, *args, **kwargs):
-            pass
+    class MockModelsService:
         def generate_content(self, *args, **kwargs):
             return MockResponse()
 
-    import google.generativeai as genai
-    monkeypatch.setattr(genai, "GenerativeModel", MockModel)
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            self.models = MockModelsService()
+
+    assistant.client = MockClient()
 
     result = assistant.answer_question("How long does a proprietor have copyright?")
     assert result["status"] == "supported"
@@ -85,14 +84,15 @@ def test_mock_rag_unsupported_not_found(monkeypatch):
     class MockResponse:
         text = "Not found"
 
-    class MockModel:
-        def __init__(self, *args, **kwargs):
-            pass
+    class MockModelsService:
         def generate_content(self, *args, **kwargs):
             return MockResponse()
 
-    import google.generativeai as genai
-    monkeypatch.setattr(genai, "GenerativeModel", MockModel)
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            self.models = MockModelsService()
+
+    assistant.client = MockClient()
 
     result = assistant.answer_question("What is the government fee to register a trademark?")
     assert result["answer"] == "Not found"

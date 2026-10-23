@@ -1,21 +1,55 @@
 import re
+import warnings
 from pathlib import Path
 from typing import List, Dict, Any
+
+# Suppress noisy framework deprecation warnings for a clean user experience
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import pypdf
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 import chromadb
 
 import config
 
+# Global cache for embedding model to avoid reloading weights repeatedly
+_EMBEDDING_MODEL = None
+
+
+def get_embedding_model():
+    """
+    Returns a cached SentenceTransformer embedding model.
+    Loads once into memory for fast, deterministic embeddings.
+    """
+    global _EMBEDDING_MODEL
+    if _EMBEDDING_MODEL is None:
+        _EMBEDDING_MODEL = SentenceTransformer(
+            config.EMBEDDING_MODEL_NAME,
+            device="cpu"
+        )
+    return _EMBEDDING_MODEL
+
+
+class LocalEmbeddingFunction:
+    """Lightweight adapter class for ChromaDB and LangChain compatibility."""
+
+    def __init__(self):
+        self.model = get_embedding_model()
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        embeddings = self.model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        return embeddings.tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        embedding = self.model.encode([text], normalize_embeddings=True, show_progress_bar=False)[0]
+        return embedding.tolist()
+
 
 def get_embedding_function():
-    """Returns local HuggingFace embedding function using sentence-transformers."""
-    return HuggingFaceEmbeddings(
-        model_name=config.EMBEDDING_MODEL_NAME,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True}
-    )
+    """Returns local embedding adapter."""
+    return LocalEmbeddingFunction()
 
 
 # Official Table of Contents mapping for exact chapter determination
@@ -140,7 +174,6 @@ def index_chunks(chunks: List[Dict[str, Any]], force_reindex: bool = False):
     """
     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
 
-    # Check if collection already exists
     existing_collections = [c.name for c in client.list_collections()]
     if config.COLLECTION_NAME in existing_collections:
         if force_reindex:
@@ -165,7 +198,6 @@ def index_chunks(chunks: List[Dict[str, Any]], force_reindex: bool = False):
     print(f"[INFO] Generating embeddings with {config.EMBEDDING_MODEL_NAME}...")
     embedding_func = get_embedding_function()
 
-    # Batch insert into ChromaDB
     batch_size = 64
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
