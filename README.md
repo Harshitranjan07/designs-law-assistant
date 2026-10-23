@@ -301,14 +301,3 @@ Strict `Not found` output when queried about out-of-scope Trademark fees:
 - **Repeated Ingestion:** The ingestion pipeline checks existing document hashes/IDs to prevent duplicate index entries.
 - **Strict Evidence Guard:** When evidence lacks answers, the system strictly outputs `Not found` with no surrounding conversational padding.
 
----
-
-## 🎓 Viva / Submission Cheatsheet
-
-If asked during your college viva:
-1. **Why use local embeddings (`all-MiniLM-L6-v2`)?**  
-   It generates 384-dimensional dense vectors directly on the machine's CPU without external network latency, token costs, or rate limits.
-2. **What is ChromaDB's role?**  
-   It stores document vectors and their corresponding metadata (page, chapter, section) in a local persistent index and performs approximate nearest neighbor (ANN) search via cosine similarity.
-3. **How is hallucination prevented?**  
-   Hallucination is eliminated through prompt constraints instructing temperature=0.0 and a strict negative constraint: any claim unsupported by context extracts triggers an exact `Not found` response.
